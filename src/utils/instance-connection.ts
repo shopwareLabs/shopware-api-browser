@@ -1,3 +1,5 @@
+import { CORS_ERROR_DETAIL } from './cors-guidance'
+
 export interface ConnectionTestResult {
   ok: boolean
   message: string
@@ -40,7 +42,7 @@ export async function testInstanceConnection(baseUrl: string): Promise<Connectio
 
     return {
       ok: false,
-      message: 'Connection failed. Check CORS and network reachability.',
+      message: `Connection failed. ${CORS_ERROR_DETAIL}`,
     }
   } finally {
     window.clearTimeout(timeout)

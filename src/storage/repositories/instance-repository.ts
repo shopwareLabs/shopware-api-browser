@@ -1,5 +1,7 @@
 import type { AppInstance, AuthType } from '../../domain/models'
+import { browserContextKey } from '../../utils/browser-context'
 import { appDb } from '../app-db'
+import { activeEndpointTabSettingKey, selectedSalesChannelSettingKey } from './settings-repository'
 
 export interface CreateInstanceInput {
   displayName: string
@@ -58,12 +60,26 @@ export class InstanceRepository {
     })
   }
 
+  async clearCachedData(instanceId: string): Promise<void> {
+    const existing = await this.getById(instanceId)
+    if (!existing) {
+      throw new Error(`Instance ${instanceId} was not found`)
+    }
+
+    for (const apiMode of ['admin', 'store'] as const) {
+      await appDb.schemas.delete(browserContextKey(instanceId, apiMode))
+      await appDb.authSessions.delete(browserContextKey(instanceId, apiMode))
+      await appDb.endpointTabs.where('[instanceId+apiMode]').equals([instanceId, apiMode]).delete()
+      await appDb.requestHistory.where('[instanceId+apiMode]').equals([instanceId, apiMode]).delete()
+      await appDb.settings.delete(activeEndpointTabSettingKey(instanceId, apiMode))
+    }
+
+    await appDb.settings.delete(selectedSalesChannelSettingKey(instanceId))
+  }
+
   async delete(id: string): Promise<void> {
+    await this.clearCachedData(id)
     await appDb.instances.delete(id)
-    await appDb.schemas.delete(id)
-    await appDb.authSessions.delete(id)
-    await appDb.endpointTabs.where('instanceId').equals(id).delete()
-    await appDb.requestHistory.where('instanceId').equals(id).delete()
   }
 }
 

@@ -3,7 +3,7 @@ import {
   MtBanner,
   MtButton,
   MtCard,
-  MtEmptyState,
+  MtIcon,
   MtModal,
   MtModalRoot,
   MtPasswordField,
@@ -15,7 +15,10 @@ import {
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { AppInstance } from '../domain/models'
+import { useEndpointTabStore } from '../stores/endpoint-tab-store'
+import { useNavigationStore } from '../stores/navigation-store'
 import { useInstanceStore } from '../stores/instance-store'
+import { useRequestHistoryStore } from '../stores/request-history-store'
 import {
   createEmptyInstanceForm,
   toCreateInstanceInput,
@@ -24,12 +27,21 @@ import {
 } from '../utils/instance-validation'
 
 const instanceStore = useInstanceStore()
+const navigationStore = useNavigationStore()
+const endpointTabStore = useEndpointTabStore()
+const requestHistoryStore = useRequestHistoryStore()
 const router = useRouter()
 const formState = reactive(createEmptyInstanceForm())
 const formErrors = reactive<InstanceFormErrors>({})
 const editingInstanceId = ref<string | null>(null)
 const isModalOpen = ref(false)
 const isSaving = ref(false)
+const isConfirmActionRunning = ref(false)
+const confirmAction = ref<
+  | { type: 'delete-instance'; instance: AppInstance }
+  | { type: 'clear-cached-data'; instance: AppInstance }
+  | null
+>(null)
 const { addSnackbar } = useSnackbar()
 
 const isEditing = computed(() => editingInstanceId.value !== null)
@@ -124,15 +136,90 @@ function resetForm(): void {
   clearValidationErrors()
 }
 
-async function deleteInstance(instance: AppInstance): Promise<void> {
-  const shouldDelete = window.confirm(
-    `Delete "${instance.displayName}" and all related local data? This cannot be undone.`,
-  )
-  if (!shouldDelete) {
+function openDeleteInstanceConfirm(instance: AppInstance): void {
+  confirmAction.value = { type: 'delete-instance', instance }
+}
+
+function openClearCachedDataConfirm(instance: AppInstance): void {
+  confirmAction.value = { type: 'clear-cached-data', instance }
+}
+
+function closeConfirmAction(): void {
+  confirmAction.value = null
+}
+
+const confirmActionTitle = computed(() => {
+  if (!confirmAction.value) {
+    return ''
+  }
+
+  switch (confirmAction.value.type) {
+    case 'delete-instance':
+      return `Delete "${confirmAction.value.instance.displayName}"?`
+    case 'clear-cached-data':
+      return `Clear cached data for "${confirmAction.value.instance.displayName}"?`
+  }
+})
+
+const confirmActionDescription = computed(() => {
+  if (!confirmAction.value) {
+    return ''
+  }
+
+  switch (confirmAction.value.type) {
+    case 'delete-instance':
+      return 'This removes the instance configuration and all related local data (schema, tabs, auth session, and request history). This cannot be undone.'
+    case 'clear-cached-data':
+      return 'This removes the cached schema, open endpoint tabs, auth session, and request history for this instance. The instance configuration and credentials are kept.'
+  }
+})
+
+const confirmActionLabel = computed(() => {
+  if (!confirmAction.value) {
+    return 'Confirm'
+  }
+
+  switch (confirmAction.value.type) {
+    case 'delete-instance':
+      return 'Delete instance'
+    case 'clear-cached-data':
+      return 'Clear cached data'
+  }
+})
+
+async function executeConfirmAction(): Promise<void> {
+  if (!confirmAction.value) {
     return
   }
 
-  await instanceStore.remove(instance.id)
+  isConfirmActionRunning.value = true
+
+  try {
+    if (confirmAction.value.type === 'delete-instance') {
+      const { instance } = confirmAction.value
+      await instanceStore.remove(instance.id)
+      navigationStore.removeInstance(instance.id)
+      endpointTabStore.invalidateInstance(instance.id)
+      requestHistoryStore.invalidateInstance(instance.id)
+      addSnackbar({
+        message: `Deleted "${instance.displayName}" and related local data.`,
+        variant: 'success',
+      })
+    } else {
+      const { instance } = confirmAction.value
+      await instanceStore.clearCachedData(instance.id)
+      endpointTabStore.invalidateInstance(instance.id)
+      requestHistoryStore.invalidateInstance(instance.id)
+      addSnackbar({
+        message: `Cleared cached data for "${instance.displayName}".`,
+        variant: 'success',
+      })
+    }
+
+    closeConfirmAction()
+  } finally {
+    isConfirmActionRunning.value = false
+  }
 }
 
 async function testConnection(instance: AppInstance): Promise<void> {
@@ -150,8 +237,17 @@ async function testConnection(instance: AppInstance): Promise<void> {
 }
 
 function openBrowser(instance: AppInstance): void {
+  navigationStore.openBrowser(instance.id, 'admin')
   router.push({
     name: 'api-browser',
+    params: { instanceId: instance.id },
+  })
+}
+
+function openStoreBrowser(instance: AppInstance): void {
+  navigationStore.openBrowser(instance.id, 'store')
+  router.push({
+    name: 'store-api-browser',
     params: { instanceId: instance.id },
   })
 }
@@ -194,6 +290,38 @@ function clearValidationErrors(): void {
 
 <template>
   <section class="overview">
+    <MtModalRoot
+      :is-open="confirmAction !== null"
+      @change="(value: boolean) => { if (!value) closeConfirmAction() }"
+    >
+      <MtModal :title="confirmActionTitle">
+        <template #default>
+          <MtText as="p">
+            {{ confirmActionDescription }}
+          </MtText>
+        </template>
+        <template #footer>
+          <div class="actions">
+            <MtButton
+              variant="secondary"
+              :disabled="isConfirmActionRunning"
+              @click="closeConfirmAction"
+            >
+              Cancel
+            </MtButton>
+            <MtButton
+              variant="critical"
+              :disabled="isConfirmActionRunning"
+              :is-loading="isConfirmActionRunning"
+              @click="executeConfirmAction"
+            >
+              {{ confirmActionLabel }}
+            </MtButton>
+          </div>
+        </template>
+      </MtModal>
+    </MtModalRoot>
+
     <MtModalRoot
       :is-open="isModalOpen"
       @change="handleModalChange"
@@ -286,57 +414,116 @@ function clearValidationErrors(): void {
       </MtModal>
     </MtModalRoot>
 
-    <MtCard
-      class="overview__main-card"
-      :title="`Configured instances (${instanceStore.count})`"
-    >
-      <template #headerRight>
-        <MtButton
-          variant="primary"
-          size="small"
-          @click="openCreateModal"
-        >
-          Add Instance
-        </MtButton>
-      </template>
-      <template #default>
-        <MtBanner
-          v-if="instanceStore.errorMessage"
-          class="feedback-banner"
-          title="Action failed"
-          variant="critical"
-        >
-          {{ instanceStore.errorMessage }}
-        </MtBanner>
+    <header class="overview__toolbar">
+      <MtText
+        as="h2"
+        weight="semibold"
+      >
+        Configured instances ({{ instanceStore.count }})
+      </MtText>
 
-        <MtText v-if="instanceStore.isLoading">
-          Loading instances...
-        </MtText>
-        <MtEmptyState
-          v-else-if="instanceStore.instances.length === 0"
-          icon="solid-server"
-          headline="No instances configured"
-          description="Create your first Shopware instance above to start browsing APIs."
-        />
-        <div
-          v-else
-          class="instance-list"
+      <MtButton
+        variant="primary"
+        size="small"
+        @click="openCreateModal"
+      >
+        Add Instance
+      </MtButton>
+    </header>
+
+    <div class="overview__body">
+      <MtBanner
+        v-if="instanceStore.errorMessage"
+        class="feedback-banner"
+        title="Action failed"
+        variant="critical"
+      >
+        {{ instanceStore.errorMessage }}
+      </MtBanner>
+
+      <MtText v-if="instanceStore.isLoading">
+        Loading instances...
+      </MtText>
+      <MtCard
+        v-else-if="instanceStore.instances.length === 0"
+        class="overview__empty-state-card"
+      >
+        <template #default>
+          <div class="overview__empty-state">
+            <div class="overview__empty-state-icon">
+              <MtIcon
+                name="solid-server"
+                color="var(--color-icon-primary-default)"
+                decorative
+              />
+            </div>
+            <div class="overview__empty-state-text">
+              <MtText
+                as="h2"
+                size="l"
+                weight="bold"
+              >
+                No instances configured
+              </MtText>
+              <MtText
+                as="p"
+                size="xs"
+                color="color-text-secondary-default"
+              >
+                Create your first Shopware instance using the Add Instance button to start browsing APIs.
+              </MtText>
+            </div>
+          </div>
+        </template>
+      </MtCard>
+      <div
+        v-else
+        class="instance-list"
+      >
+        <MtCard
+          v-for="instance in instanceStore.instances"
+          :key="instance.id"
+          class="instance-item"
+          :title="instance.displayName"
+          :subtitle="instance.baseUrl"
         >
-          <MtCard
-            v-for="instance in instanceStore.instances"
-            :key="instance.id"
-            class="instance-item"
-            :title="instance.displayName"
-            :subtitle="instance.baseUrl"
-          >
-            <template #default>
-              <div class="instance-item__actions">
+          <template #default>
+            <div class="instance-item__actions">
+              <div class="instance-item__actions-row">
                 <MtButton
-                  variant="secondary"
+                  variant="primary"
                   size="small"
                   @click="openBrowser(instance)"
                 >
-                  Open browser
+                  <template #iconFront>
+                    <MtIcon
+                      name="solid-window-terminal"
+                      size="15"
+                    />
+                  </template>
+                  Open API Browser
+                </MtButton>
+                <MtButton
+                  variant="primary"
+                  size="small"
+                  @click="openStoreBrowser(instance)"
+                >
+                  <template #iconFront>
+                    <MtIcon
+                      name="solid-storefront"
+                      size="15"
+                    />
+                  </template>
+                  Open Store-API Browser
+                </MtButton>
+              </div>
+              <div class="instance-item__actions-row">
+                <MtButton
+                  variant="secondary"
+                  size="small"
+                  @click="openEditModal(instance)"
+                >
+                  Edit
                 </MtButton>
                 <MtButton
                   variant="secondary"
@@ -348,41 +535,53 @@ function clearValidationErrors(): void {
                 <MtButton
                   variant="secondary"
                   size="small"
-                  @click="openEditModal(instance)"
+                  @click="openClearCachedDataConfirm(instance)"
                 >
-                  Edit
+                  Clear cached data
                 </MtButton>
                 <MtButton
                   variant="critical"
                   size="small"
-                  @click="deleteInstance(instance)"
+                  @click="openDeleteInstanceConfirm(instance)"
                 >
                   Delete
                 </MtButton>
               </div>
-            </template>
-            <template #toolbar />
-          </MtCard>
-        </div>
-      </template>
-    </MtCard>
+            </div>
+          </template>
+          <template #toolbar />
+        </MtCard>
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .overview {
+  --overview-toolbar-height: 4.5rem;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.overview__toolbar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  height: var(--overview-toolbar-height);
+  min-height: var(--overview-toolbar-height);
+  padding: 0 1.5rem;
+  border-bottom: 1px solid var(--color-border-secondary-default);
+  background-color: #fff;
+}
+
+.overview__body {
   display: grid;
   gap: 1rem;
-  padding: 0.25rem 0;
-}
-
-.overview__main-card {
-  width: 100%;
-}
-
-.overview :deep(.mt-card.overview__main-card) {
-  max-width: none !important;
-  margin: 0 !important;
+  padding: 1rem 1.5rem 1.5rem;
 }
 
 .instance-form {
@@ -408,7 +607,34 @@ function clearValidationErrors(): void {
 }
 
 .feedback-banner {
-  margin-top: 0.875rem;
+  margin-top: 0;
+}
+
+.overview :deep(.mt-card.overview__empty-state-card) {
+  width: fit-content;
+  max-width: min(100%, 32rem);
+  margin-inline: 0 !important;
+}
+
+.overview__empty-state {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.overview__empty-state-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: var(--scale-size-48);
+  height: var(--scale-size-48);
+  border-radius: var(--border-radius-xs);
+  background-color: var(--color-background-tertiary-default);
+}
+
+.overview__empty-state-text {
+  display: grid;
+  gap: 0.25rem;
 }
 
 .instance-list {
@@ -420,6 +646,11 @@ function clearValidationErrors(): void {
 }
 
 .instance-item__actions {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.instance-item__actions-row {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;

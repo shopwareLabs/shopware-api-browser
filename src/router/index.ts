@@ -17,6 +17,13 @@ export const routes = [
         path: 'instances/:instanceId/browser',
         name: 'api-browser',
         component: ApiBrowserView,
+        meta: { apiMode: 'admin' },
+      },
+      {
+        path: 'instances/:instanceId/store-browser',
+        name: 'store-api-browser',
+        component: ApiBrowserView,
+        meta: { apiMode: 'store' },
       },
     ],
   },

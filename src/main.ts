@@ -6,6 +6,7 @@ import { router } from './router'
 import { ensureStorageBootstrap } from './storage/bootstrap'
 import { registerGlobalErrorHandling } from './utils/error-handling'
 import './style.css'
+import './styles/http-method.css'
 import '@shopware-ag/meteor-component-library/styles.css'
 import '@shopware-ag/meteor-component-library/font.css'
 

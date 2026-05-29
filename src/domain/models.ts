@@ -1,4 +1,12 @@
+import type { ApiMode } from '../utils/browser-context'
+
 export type AuthType = 'userCredentials' | 'integrationCredentials'
+
+export interface SalesChannelOption {
+  id: string
+  name: string
+  accessKey: string
+}
 
 export interface AppInstance {
   id: string
@@ -14,13 +22,13 @@ export interface AppInstance {
 }
 
 export interface StoredSchema {
-  instanceId: string
+  contextKey: string
   schema: unknown
   fetchedAt: string
 }
 
 export interface AuthSession {
-  instanceId: string
+  contextKey: string
   accessToken: string
   refreshToken?: string
   expiresAt: string
@@ -29,6 +37,8 @@ export interface AuthSession {
 export interface EndpointTab {
   id?: number
   instanceId: string
+  apiMode: ApiMode
+  endpointId: string
   endpointPath: string
   method: string
   draftRequest?: {
@@ -43,9 +53,12 @@ export interface EndpointTab {
 export interface RequestHistoryEntry {
   id?: number
   instanceId: string
+  apiMode: ApiMode
+  endpointId: string
   endpointPath: string
   method: string
   requestSummary: string
+  draftRequest?: EndpointTab['draftRequest']
   responseStatus?: number
   durationMs?: number
   createdAt: string
@@ -56,4 +69,4 @@ export interface AppSetting {
   value: string
 }
 
-export const APP_DATA_VERSION = '1'
+export const APP_DATA_VERSION = '2'

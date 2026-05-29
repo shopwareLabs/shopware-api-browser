@@ -5,6 +5,10 @@ import {
   type CreateInstanceInput,
 } from '../storage/repositories/instance-repository'
 import {
+  clearAllLocalData as clearAllLocalDataFromStorage,
+  clearInstanceCachedData,
+} from '../services/data-management-service'
+import {
   testInstanceConnection,
   type ConnectionTestResult,
 } from '../utils/instance-connection'
@@ -70,6 +74,29 @@ export const useInstanceStore = defineStore('instances', {
         await instanceRepository.delete(id)
         this.instances = this.instances.filter((instance) => instance.id !== id)
         delete this.connectionTestResults[id]
+      } catch (error) {
+        this.errorMessage = getErrorMessage(error)
+        throw error
+      }
+    },
+    async clearCachedData(id: string): Promise<void> {
+      this.errorMessage = null
+
+      try {
+        await clearInstanceCachedData(id)
+        delete this.connectionTestResults[id]
+      } catch (error) {
+        this.errorMessage = getErrorMessage(error)
+        throw error
+      }
+    },
+    async clearAllLocalData(): Promise<void> {
+      this.errorMessage = null
+
+      try {
+        await clearAllLocalDataFromStorage()
+        this.instances = []
+        this.connectionTestResults = {}
       } catch (error) {
         this.errorMessage = getErrorMessage(error)
         throw error
